@@ -1,14 +1,14 @@
 {
   "name": "zero-mega-bot",
-  "version": "2.0.4",
-  "description": "ZERO MEGA 2.0.4 PLUS ++++ OMEGA - Sistema de Reseñas Ultra Avanzado",
+  "version": "2.0.5",
+  "description": "ZERO MEGA 2.0.5 PLUS ++++ OMEGA - Sistema de Reseñas Ultra Avanzado",
   "main": "server.js",
   "scripts": {
     "start": "node server.js",
     "dev": "node index.js",
     "test": "echo \"Error: no test specified\" && exit 1"
   },
-  "keywords": ["discord", "bot", "review", "rating"],
+  "keywords": ["discord", "bot", "review", "rating", "neon"],
   "author": "ultra3_dev",
   "license": "ISC",
   "dependencies": {
