@@ -1,4 +1,4 @@
-// index.js - ZERO MEGA 2.0.4 PLUS ++++ OMEGA (BUGS FIXED)
+// bot.js - Bot principal ZERO MEGA 2.0.4 PLUS ++++ OMEGA
 const {
   Client,
   GatewayIntentBits,
@@ -89,8 +89,11 @@ class Database {
     try {
       if (fs.existsSync(this.filePath)) {
         this.data = JSON.parse(fs.readFileSync(this.filePath, "utf-8"));
+        logger.success(`📁 Base de datos cargada: ${Object.keys(this.data).length} usuarios`);
       } else {
+        this.data = {};
         this.save();
+        logger.info("📁 Base de datos creada nueva");
       }
     } catch (error) {
       logger.error(`Error al cargar DB: ${error.message}`);
@@ -102,8 +105,10 @@ class Database {
   save() {
     try {
       fs.writeFileSync(this.filePath, JSON.stringify(this.data, null, 2));
+      return true;
     } catch (error) {
       logger.error(`Error guardar DB: ${error.message}`);
+      return false;
     }
   }
 
@@ -125,6 +130,7 @@ class Database {
       };
       this.save();
     }
+    return this.data[userId];
   }
 
   get(userId) {
@@ -136,15 +142,13 @@ class Database {
   }
 
   addReview(targetId, reviewData) {
-    this.ensureUser(targetId, { 
+    const user = this.ensureUser(targetId, { 
       name: reviewData.targetName, 
       roleId: reviewData.roleId, 
       roleName: reviewData.roleName 
     });
 
-    const user = this.data[targetId];
-
-    if (!user.roles) user.roles = [];
+    // Agregar rol si no existe
     if (!user.roles.includes(reviewData.roleId)) {
       user.roles.push(reviewData.roleId);
     }
@@ -176,17 +180,17 @@ class Database {
   }
 
   grantAchievement(userId, achievementObj) {
-    this.ensureUser(userId);
-    if (!this.data[userId].achievements) this.data[userId].achievements = [];
+    const user = this.ensureUser(userId);
+    if (!user.achievements) user.achievements = [];
 
-    if (!this.data[userId].achievements.includes(achievementObj.id)) {
-      this.data[userId].achievements.push(achievementObj.id);
+    if (!user.achievements.includes(achievementObj.id)) {
+      user.achievements.push(achievementObj.id);
 
-      if (!this.data[userId].achievements_meta) {
-        this.data[userId].achievements_meta = {};
+      if (!user.achievements_meta) {
+        user.achievements_meta = {};
       }
 
-      this.data[userId].achievements_meta[achievementObj.id] = {
+      user.achievements_meta[achievementObj.id] = {
         name: achievementObj.name,
         description: achievementObj.description,
         role: achievementObj.role,
@@ -211,7 +215,7 @@ class Database {
   getTopByRole(roleId = null, sortBy = "stars") {
     let entries = Object.entries(this.data);
     if (roleId && roleId !== "general") {
-      entries = entries.filter(([_, d]) => d.roleId === roleId);
+      entries = entries.filter(([_, d]) => d.roleId === roleId || (d.roles && d.roles.includes(roleId)));
     }
 
     const mapped = entries
@@ -380,6 +384,7 @@ class ReportsDB {
       if (fs.existsSync(this.filePath)) {
         this.data = JSON.parse(fs.readFileSync(this.filePath, "utf-8"));
       } else {
+        this.data = [];
         this.save();
       }
     } catch (error) {
@@ -392,8 +397,10 @@ class ReportsDB {
   save() {
     try {
       fs.writeFileSync(this.filePath, JSON.stringify(this.data, null, 2));
+      return true;
     } catch (error) {
       logger.error(`Error guardar reports: ${error.message}`);
+      return false;
     }
   }
 
@@ -743,15 +750,25 @@ client.once("ready", async () => {
   logger.success(`✅ Bot: ${client.user.tag} | ZERO MEGA 2.0.4 PLUS ++++ OMEGA`);
   client.user.setActivity(`${config.prefix}perfil | /perfil`, { type: "LISTENING" });
 
+  // Actualizar estado en el dashboard
+  try {
+    const { updateBotStatus } = require('./server.js');
+    const reviewsCount = Object.values(db.data).reduce((acc, user) => 
+      acc + (user.reviews ? user.reviews.length : 0), 0);
+    
+    updateBotStatus({
+      isReady: true,
+      startTime: new Date(),
+      guildCount: client.guilds.cache.size,
+      userCount: client.guilds.cache.reduce((acc, guild) => acc + guild.memberCount, 0),
+      reviewsCount
+    });
+  } catch (e) {
+    logger.error(`Error actualizando estado: ${e.message}`);
+  }
+
   try {
     const rest = new REST({ version: "10" }).setToken(config.token);
-
-    try {
-      await rest.put(Routes.applicationCommands(client.user.id), { body: [] });
-      logger.info("Comandos globales limpiados");
-    } catch (e) {
-      logger.error(`No pude limpiar comandos globales: ${e.message}`);
-    }
 
     const commands = [
       new SlashCommandBuilder()
@@ -1256,21 +1273,6 @@ client.on("interactionCreate", async (i) => {
   try {
     if (i.guildId && i.guildId !== config.serverId) return;
 
-    if (i.isButton()) {
-      const parts = i.customId.split("_");
-      const buttonType = parts[0];
-
-      if (["review", "report", "achievements_menu", "back_to_profile", "view_role_achievements", "top_switch", "prev_page", "next_page"].includes(buttonType)) {
-        const authorId = parts[parts.length - 1];
-        if (i.user.id !== authorId) {
-          return i.reply({ 
-            content: "❌ Solo el autor de este mensaje puede usar estos botones.", 
-            ephemeral: true 
-          });
-        }
-      }
-    }
-
     // SLASH COMMANDS
     if (i.isCommand()) {
       const cmd = i.commandName;
@@ -1639,133 +1641,635 @@ client.on("interactionCreate", async (i) => {
       }
     }
 
-    // BOTONES Y MENÚS (mantener todo el código existente de interacciones)
-    if (i.isButton() && i.customId.startsWith("review_")) {
+    // BOTONES
+    if (i.isButton()) {
       const parts = i.customId.split("_");
-      const targetId = parts[1];
-      const authorId = parts[2];
+      const buttonType = parts[0];
+      const authorId = parts[parts.length - 1];
 
+      // Verificar que solo el autor pueda usar los botones
       if (i.user.id !== authorId) {
         return i.reply({ 
-          content: "❌ Solo el autor de este mensaje puede usar este botón.", 
+          content: "❌ Solo el autor de este mensaje puede usar estos botones.", 
           ephemeral: true 
         });
       }
 
-      if (cooldowns.hasRecentAttempt(i.user.id)) {
-        return i.reply({ 
-          content: "⚠️ Ya tienes un formulario de reseña abierto. Cierra el anterior primero.", 
-          ephemeral: true 
-        });
+      // REVIEW BUTTON
+      if (buttonType === "review") {
+        const targetId = parts[1];
+
+        if (cooldowns.hasRecentAttempt(i.user.id)) {
+          return i.reply({ 
+            content: "⚠️ Ya tienes un formulario de reseña abierto. Cierra el anterior primero.", 
+            ephemeral: true 
+          });
+        }
+
+        cooldowns.setAttempt(i.user.id);
+
+        const member = await i.guild.members.fetch(i.user.id);
+        const target = await i.guild.members.fetch(targetId).catch(() => null);
+        const targetRoles = utils.getUserRoles(target);
+
+        if (!target || !targetRoles.length) {
+          cooldowns.clearAttempt(i.user.id);
+          return i.reply({ content: "❌ Usuario no válido", ephemeral: true });
+        }
+
+        if (target.id === i.user.id) {
+          cooldowns.clearAttempt(i.user.id);
+          return i.reply({ content: "❌ No puedes reseñarte a ti mismo", ephemeral: true });
+        }
+
+        if (!utils.isValidAlt(member)) {
+          cooldowns.clearAttempt(i.user.id);
+          return i.reply({ 
+            content: "🛑 Requisitos: +7 días de antigüedad, avatar personalizado, 2+ roles en el servidor", 
+            ephemeral: true 
+          });
+        }
+
+        const cd = cooldowns.check(i.user.id);
+        if (cd.active) {
+          cooldowns.clearAttempt(i.user.id);
+          return i.reply({ 
+            content: `⏳ Espera ${utils.formatTime(cd.remaining)} antes de dejar otra reseña.`, 
+            ephemeral: true 
+          });
+        }
+
+        const expiry = db.getReviewCooldownExpiry(targetId, i.user.id);
+        if (expiry && expiry > Date.now()) {
+          cooldowns.clearAttempt(i.user.id);
+          return i.reply({ 
+            content: `⚠️ Ya reseñaste a este usuario recientemente. Espera ${utils.formatTime(expiry - Date.now())}.`, 
+            ephemeral: true 
+          });
+        }
+
+        if (targetRoles.length > 1) {
+          const selectMenu = new StringSelectMenuBuilder()
+            .setCustomId(`select_review_role_${target.id}_${authorId}`)
+            .setPlaceholder("Selecciona el rol a calificar")
+            .addOptions(
+              targetRoles.map(role => ({
+                label: role.name,
+                description: `Calificar como ${role.name}`,
+                value: role.id,
+                emoji: role.emoji
+              }))
+            );
+
+          const row = new ActionRowBuilder().addComponents(selectMenu);
+
+          const embed = new EmbedBuilder()
+            .setTitle(`Seleccionar Rol - ${target.user.username}`)
+            .setDescription(`**${target.user.username}** tiene ${targetRoles.length} roles. Selecciona cuál quieres calificar:`)
+            .setColor("Blue")
+            .addFields(
+              targetRoles.map(role => ({
+                name: `${role.emoji} ${role.name}`,
+                value: "▸ Selecciona en el menú desplegable",
+                inline: true
+              }))
+            )
+            .setTimestamp();
+
+          return i.reply({ embeds: [embed], components: [row], ephemeral: true });
+        }
+
+        const targetRole = targetRoles[0];
+        const modal = new ModalBuilder()
+          .setCustomId(`modal_${target.id}_${targetRole.id}_${authorId}`)
+          .setTitle(`Reseña para ${target.user.username}`);
+
+        modal.addComponents(
+          new ActionRowBuilder().addComponents(
+            new TextInputBuilder()
+              .setCustomId("text")
+              .setLabel("Tu experiencia (20-500 caracteres)")
+              .setStyle(TextInputStyle.Paragraph)
+              .setMinLength(config.minReviewLength)
+              .setMaxLength(config.maxReviewLength)
+              .setRequired(true)
+              .setPlaceholder("Describe tu experiencia con este miembro...")
+          ),
+          new ActionRowBuilder().addComponents(
+            new TextInputBuilder()
+              .setCustomId("stars")
+              .setLabel("Calificación (1.0 - 5.0)")
+              .setStyle(TextInputStyle.Short)
+              .setPlaceholder("Ej: 4.5 (decimales permitidos)")
+              .setMinLength(1)
+              .setMaxLength(4)
+              .setRequired(true)
+          )
+        );
+
+        return i.showModal(modal);
       }
 
-      cooldowns.setAttempt(i.user.id);
+      // REPORT BUTTON
+      else if (buttonType === "report") {
+        const targetId = parts[1];
 
-      const member = await i.guild.members.fetch(i.user.id);
-      const target = await i.guild.members.fetch(targetId).catch(() => null);
-      const targetRoles = utils.getUserRoles(target);
+        const modal = new ModalBuilder()
+          .setCustomId(`report_modal_${targetId}_${authorId}`)
+          .setTitle("🚩 Reportar Usuario");
 
-      if (!target || !targetRoles.length) {
-        cooldowns.clearAttempt(i.user.id);
-        return i.reply({ content: "❌ Usuario no válido", ephemeral: true });
+        modal.addComponents(
+          new ActionRowBuilder().addComponents(
+            new TextInputBuilder()
+              .setCustomId("reason")
+              .setLabel("Razón del reporte (10-500 caracteres)")
+              .setStyle(TextInputStyle.Paragraph)
+              .setMinLength(10)
+              .setMaxLength(500)
+              .setRequired(true)
+          )
+        );
+
+        return i.showModal(modal);
       }
 
-      if (target.id === i.user.id) {
-        cooldowns.clearAttempt(i.user.id);
-        return i.reply({ content: "❌ No puedes reseñarte a ti mismo", ephemeral: true });
-      }
+      // ACHIEVEMENTS MENU BUTTON
+      else if (buttonType === "achievements") {
+        const targetId = parts[2];
 
-      if (!utils.isValidAlt(member)) {
-        cooldowns.clearAttempt(i.user.id);
-        return i.reply({ 
-          content: "🛑 Requisitos: +7 días de antigüedad, avatar personalizado, 2+ roles en el servidor", 
-          ephemeral: true 
-        });
-      }
+        const target = await i.guild.members.fetch(targetId).catch(() => null);
+        if (!target) return i.reply({ content: "❌ Usuario no encontrado", ephemeral: true });
 
-      const cd = cooldowns.check(i.user.id);
-      if (cd.active) {
-        cooldowns.clearAttempt(i.user.id);
-        return i.reply({ 
-          content: `⏳ Espera ${utils.formatTime(cd.remaining)} antes de dejar otra reseña.`, 
-          ephemeral: true 
-        });
-      }
-
-      const expiry = db.getReviewCooldownExpiry(targetId, i.user.id);
-      if (expiry && expiry > Date.now()) {
-        cooldowns.clearAttempt(i.user.id);
-        return i.reply({ 
-          content: `⚠️ Ya reseñaste a este usuario recientemente. Espera ${utils.formatTime(expiry - Date.now())}.`, 
-          ephemeral: true 
-        });
-      }
-
-      if (targetRoles.length > 1) {
-        const selectMenu = new StringSelectMenuBuilder()
-          .setCustomId(`select_review_role_${target.id}_${authorId}`)
-          .setPlaceholder("Selecciona el rol a calificar")
-          .addOptions(
-            targetRoles.map(role => ({
-              label: role.name,
-              description: `Calificar como ${role.name}`,
-              value: role.id,
-              emoji: role.emoji
-            }))
-          );
-
-        const row = new ActionRowBuilder().addComponents(selectMenu);
+        const roles = utils.getUserRoles(target);
+        if (roles.length === 0) {
+          return i.reply({ content: "❌ Este usuario no tiene roles válidos.", ephemeral: true });
+        }
 
         const embed = new EmbedBuilder()
-          .setTitle(`Seleccionar Rol - ${target.user.username}`)
-          .setDescription(`**${target.user.username}** tiene ${targetRoles.length} roles. Selecciona cuál quieres calificar:`)
-          .setColor("Blue")
-          .addFields(
-            targetRoles.map(role => ({
-              name: `${role.emoji} ${role.name}`,
-              value: "▸ Selecciona en el menú desplegable",
-              inline: true
-            }))
-          )
+          .setTitle(`🏆 Logros de ${target.user.username}`)
+          .setDescription(`Selecciona un rol para ver los logros específicos:`)
+          .setColor("Gold")
           .setTimestamp();
 
-        return i.reply({ embeds: [embed], components: [row], ephemeral: true });
+        const buttons = [
+          new ButtonBuilder()
+            .setCustomId(`back_to_profile_${targetId}_${authorId}`)
+            .setLabel("👤 Perfil")
+            .setStyle(ButtonStyle.Secondary)
+        ];
+
+        for (const role of roles) {
+          buttons.push(
+            new ButtonBuilder()
+              .setCustomId(`view_role_achievements_${targetId}_${role.id}_${authorId}`)
+              .setLabel(`${role.emoji} ${role.name}`)
+              .setStyle(ButtonStyle.Primary)
+          );
+        }
+
+        const rows = [];
+        for (let idx = 0; idx < buttons.length; idx += 5) {
+          rows.push(new ActionRowBuilder().addComponents(buttons.slice(idx, idx + 5)));
+        }
+
+        return i.update({ embeds: [embed], components: rows });
       }
 
-      const targetRole = targetRoles[0];
-      const modal = new ModalBuilder()
-        .setCustomId(`modal_${target.id}_${targetRole.id}_${authorId}`)
-        .setTitle(`Reseña para ${target.user.username}`);
+      // TOP SWITCH BUTTON
+      else if (buttonType === "top") {
+        const roleArg = parts[2];
+        const currentType = parts[3];
 
-      modal.addComponents(
-        new ActionRowBuilder().addComponents(
-          new TextInputBuilder()
-            .setCustomId("text")
-            .setLabel("Tu experiencia (20-500 caracteres)")
-            .setStyle(TextInputStyle.Paragraph)
-            .setMinLength(config.minReviewLength)
-            .setMaxLength(config.maxReviewLength)
-            .setRequired(true)
-            .setPlaceholder("Describe tu experiencia con este miembro...")
-        ),
-        new ActionRowBuilder().addComponents(
-          new TextInputBuilder()
-            .setCustomId("stars")
-            .setLabel("Calificación (1.0 - 5.0)")
-            .setStyle(TextInputStyle.Short)
-            .setPlaceholder("Ej: 4.5 (decimales permitidos)")
-            .setMinLength(1)
-            .setMaxLength(4)
-            .setRequired(true)
-        )
-      );
+        const newType = currentType === "stars" ? "reviews" : "stars";
 
-      return i.showModal(modal);
+        const categoryMap = { 
+          staff: "1430002824305180814", 
+          trial: "1432195295378407454", 
+          helper: "1446861161088684164", 
+          mm: "1430002835910561903" 
+        };
+
+        let roleId = null, title = "🏆 Top 10 General", color = "Blue";
+        if (roleArg !== "general" && categoryMap[roleArg]) {
+          roleId = categoryMap[roleArg];
+          const roleInfo = config.roleMapping[roleId];
+          title = `${roleInfo.emoji} Top 10 ${roleInfo.name}`;
+          color = roleInfo.color;
+        }
+
+        const top = db.getTopByRole(roleId, newType);
+        if (top.length === 0) {
+          return i.update({ content: "❌ No hay reseñas registradas.", embeds: [], components: [] });
+        }
+
+        const embed = new EmbedBuilder()
+          .setTitle(title)
+          .setDescription(top.map((u, idx) => {
+            const medal = idx === 0 ? "🥇" : idx === 1 ? "🥈" : idx === 2 ? "🥉" : `${idx + 1}.`;
+            const stat = newType === "stars" ? `⭐ ${u.avg}` : `📝 ${u.reviews} reseñas`;
+            return `${medal} **${u.name}** - ${stat}`;
+          }).join("\n"))
+          .setColor(color)
+          .setFooter({ text: `Ordenado por ${newType === "stars" ? "estrellas" : "cantidad de reseñas"}` })
+          .setTimestamp();
+
+        const buttonRow = new ActionRowBuilder().addComponents(
+          new ButtonBuilder()
+            .setCustomId(`top_switch_${roleArg}_${newType}_${authorId}`)
+            .setLabel(newType === "stars" ? "📝 Ver por Reseñas" : "⭐ Ver por Estrellas")
+            .setStyle(ButtonStyle.Primary)
+        );
+
+        return i.update({ embeds: [embed], components: [buttonRow] });
+      }
+
+      // PREV/NEXT PAGE BUTTONS
+      else if (buttonType === "prev" || buttonType === "next") {
+        const targetId = parts[2];
+        const currentPage = parseInt(parts[3]);
+        const newPage = buttonType === "prev" ? currentPage - 1 : currentPage + 1;
+        const perPage = 5;
+
+        const userData = db.get(targetId);
+        if (!userData || !userData.reviews || userData.reviews.length === 0) {
+          return i.update({ content: "❌ No hay reseñas registradas.", components: [] });
+        }
+
+        const totalReviews = userData.reviews.length;
+        const totalPages = Math.ceil(totalReviews / perPage);
+        const startIdx = (newPage - 1) * perPage;
+        const endIdx = startIdx + perPage;
+        const pageReviews = userData.reviews.slice(startIdx, endIdx).reverse();
+
+        const target = await i.guild.members.fetch(targetId).catch(() => null);
+        if (!target) return i.update({ content: "❌ Usuario no encontrado", components: [] });
+
+        const embed = new EmbedBuilder()
+          .setTitle(`📝 Reseñas de ${target.user.username}`)
+          .setDescription(`**Página ${newPage}/${totalPages}** • ${totalReviews} reseñas totales`)
+          .setColor("Gold")
+          .setThumbnail(target.user.displayAvatarURL({ size: 128 }))
+          .setTimestamp();
+
+        pageReviews.forEach((review, idx) => {
+          const date = new Date(review.date);
+          const roleInfo = config.roleMapping[review.roleId] || { name: "Desconocido", emoji: "❓" };
+
+          embed.addFields({
+            name: `${config.stars.icon.repeat(Math.round(review.rating))} ${review.rating}/5 • ${roleInfo.emoji} ${roleInfo.name}`,
+            value: `**Por:** ${review.authorName}\n**Fecha:** ${date.toLocaleDateString()}\n**Comentario:** ${review.text.substring(0, 150)}${review.text.length > 150 ? '...' : ''}`,
+            inline: false
+          });
+        });
+
+        const row = new ActionRowBuilder().addComponents(
+          new ButtonBuilder()
+            .setCustomId(`prev_page_${targetId}_${newPage}_${authorId}`)
+            .setLabel("◀️ Anterior")
+            .setStyle(ButtonStyle.Primary)
+            .setDisabled(newPage <= 1),
+          new ButtonBuilder()
+            .setCustomId(`next_page_${targetId}_${newPage}_${authorId}`)
+            .setLabel("Siguiente ▶️")
+            .setStyle(ButtonStyle.Primary)
+            .setDisabled(newPage >= totalPages)
+        );
+
+        return i.update({ embeds: [embed], components: [row] });
+      }
+
+      // BACK TO PROFILE BUTTON
+      else if (buttonType === "back") {
+        const targetId = parts[3];
+
+        const target = await i.guild.members.fetch(targetId).catch(() => null);
+        if (!target) return i.reply({ content: "❌ Usuario no encontrado", ephemeral: true });
+
+        const roles = utils.getUserRoles(target);
+        if (roles.length === 0) {
+          return i.reply({ content: "❌ El usuario no tiene roles válidos.", ephemeral: true });
+        }
+
+        const userData = db.get(target.id) || { reviews: [], stars: {}, reported: 0 };
+        const stats = utils.calculateStarDistribution(userData.reviews);
+
+        const total = userData.reviews.length;
+        const avg = total > 0 ? 
+          (userData.reviews.reduce((s, r) => s + r.rating, 0) / total).toFixed(2) : 
+          "0.00";
+
+        const recommended = (userData.stars[4] || 0) + (userData.stars[5] || 0);
+        const negative = (userData.stars[1] || 0) + (userData.stars[2] || 0);
+        const trust = total > 0 ? Math.round((recommended / total) * 100) : 100;
+
+        const roleNames = roles.map(r => `${r.emoji} ${r.name}`).join(", ");
+
+        const userAchievements = db.getAchievements(target.id);
+        const userRoles = roles.map(r => r.name);
+        const achievementsForRoles = ACHIEVEMENTS.filter(a => userRoles.includes(a.role));
+        const unlockedCount = userAchievements.filter(a => achievementsForRoles.some(ach => ach.id === a.id)).length;
+
+        let description = total === 0 ? 
+          `${config.stars.icon} **Sin reseñas aún**` : 
+          `${config.stars.icon} **Calificación:** \`${avg}/5\`\n${utils.createStarsBar(parseFloat(avg))}`;
+
+        let starDistribution = "";
+        for (let i = 5; i >= 1; i--) {
+          const count = stats.distribution[i] || 0;
+          const percent = stats.percentages[i] || "0.0";
+          const bar = utils.createStarPercentageBar(percent);
+          starDistribution += `${config.stars.icon.repeat(i)} ${bar} ${percent}% (${count})\n`;
+        }
+
+        const embed = new EmbedBuilder()
+          .setTitle(`${config.stars.animated} ${target.user.username}`)
+          .setDescription(description)
+          .addFields(
+            { name: "📋 Roles", value: roleNames, inline: false },
+            { name: "📝 Total Reseñas", value: `${total}`, inline: true },
+            { name: "👍 Recomendadas (4★+)", value: `${recommended}`, inline: true },
+            { name: "⭐ Promedio", value: `${avg}/5`, inline: true },
+            { name: "🛡️ Confianza", value: `${trust}%`, inline: true },
+            { name: "📛 Críticas y Reportes", value: `Críticas: ${negative} | Reportes: ${userData.reported || 0}`, inline: true },
+            { name: "🏆 Logros", value: `${unlockedCount}/${achievementsForRoles.length}`, inline: true },
+            { name: "📊 Distribución de Estrellas", value: starDistribution || "No hay reseñas", inline: false }
+          )
+          .setColor(roles[0]?.color || "Blue")
+          .setThumbnail(target.user.displayAvatarURL({ size: 256 }))
+          .setTimestamp();
+
+        const row = new ActionRowBuilder().addComponents(
+          new ButtonBuilder()
+            .setCustomId(`review_${target.id}_${authorId}`)
+            .setLabel("✍️ Reseña")
+            .setStyle(ButtonStyle.Primary),
+          new ButtonBuilder()
+            .setCustomId(`report_${target.id}_${authorId}`)
+            .setLabel("🚩 Reportar")
+            .setStyle(ButtonStyle.Danger),
+          new ButtonBuilder()
+            .setCustomId(`achievements_menu_${target.id}_${authorId}`)
+            .setLabel("🏆 Logros")
+            .setStyle(ButtonStyle.Success)
+        );
+
+        return i.update({ embeds: [embed], components: [row] });
+      }
+
+      // VIEW ROLE ACHIEVEMENTS BUTTON
+      else if (buttonType === "view") {
+        const targetId = parts[3];
+        const roleId = parts[4];
+
+        const target = await i.guild.members.fetch(targetId).catch(() => null);
+        if (!target) return i.reply({ content: "❌ Usuario no encontrado", ephemeral: true });
+
+        const roleInfo = config.roleMapping[roleId];
+        if (!roleInfo) return i.reply({ content: "❌ Rol no válido", ephemeral: true });
+
+        const roleAchievements = ACHIEVEMENTS.filter(a => a.role === roleInfo.name);
+        const userAchievements = db.getAchievements(targetId);
+        const unlockedIds = userAchievements.map(a => a.id);
+
+        const unlockedForRole = roleAchievements.filter(a => unlockedIds.includes(a.id));
+        const pendingForRole = roleAchievements.filter(a => !unlockedIds.includes(a.id));
+
+        const embed = new EmbedBuilder()
+          .setTitle(`${roleInfo.emoji} Logros de ${roleInfo.name} - ${target.user.username}`)
+          .setDescription(`**Desbloqueados:** ${unlockedForRole.length}/9\n**Pendientes:** ${pendingForRole.length}\n\n*Cada rol tiene 9 logros con diferentes dificultades*`)
+          .setColor(roleInfo.color)
+          .setTimestamp();
+
+        if (unlockedForRole.length > 0) {
+          embed.addFields({
+            name: "✅ Desbloqueados",
+            value: unlockedForRole.map(a => 
+              `${a.emoji} **${a.name}**\n${a.description} (*${a.difficulty}*)`
+            ).join("\n\n"),
+            inline: true
+          });
+        }
+
+        if (pendingForRole.length > 0) {
+          embed.addFields({
+            name: "🔒 Pendientes",
+            value: pendingForRole.map(a => 
+              `🔒 **${a.name}**\n${a.description} (*${a.difficulty}*)`
+            ).join("\n\n"),
+            inline: true
+          });
+        }
+
+        const row = new ActionRowBuilder().addComponents(
+          new ButtonBuilder()
+            .setCustomId(`back_to_profile_${targetId}_${authorId}`)
+            .setLabel("👤 Volver al Perfil")
+            .setStyle(ButtonStyle.Secondary)
+        );
+
+        return i.update({ embeds: [embed], components: [row] });
+      }
     }
 
-    // ... (mantener TODO el resto del código de interacciones SIN CAMBIAR) ...
-    // Solo necesitas copiar desde aquí hasta el final de tu archivo original
-    
+    // SELECT MENUS
+    if (i.isStringSelectMenu()) {
+      if (i.customId.startsWith("select_review_role_")) {
+        const parts = i.customId.split("_");
+        const targetId = parts[3];
+        const authorId = parts[4];
+
+        if (i.user.id !== authorId) {
+          return i.reply({ 
+            content: "❌ Solo el autor de este mensaje puede usar este menú.", 
+            ephemeral: true 
+          });
+        }
+
+        const roleId = i.values[0];
+        const target = await i.guild.members.fetch(targetId).catch(() => null);
+        const targetRole = config.roleMapping[roleId];
+
+        if (!target || !targetRole) {
+          cooldowns.clearAttempt(i.user.id);
+          return i.reply({ content: "❌ Rol o usuario no válido", ephemeral: true });
+        }
+
+        const modal = new ModalBuilder()
+          .setCustomId(`modal_${targetId}_${roleId}_${authorId}`)
+          .setTitle(`Reseña para ${target.user.username} (${targetRole.name})`);
+
+        modal.addComponents(
+          new ActionRowBuilder().addComponents(
+            new TextInputBuilder()
+              .setCustomId("text")
+              .setLabel("Tu experiencia (20-500 caracteres)")
+              .setStyle(TextInputStyle.Paragraph)
+              .setMinLength(config.minReviewLength)
+              .setMaxLength(config.maxReviewLength)
+              .setRequired(true)
+              .setPlaceholder("Describe tu experiencia con este miembro...")
+          ),
+          new ActionRowBuilder().addComponents(
+            new TextInputBuilder()
+              .setCustomId("stars")
+              .setLabel("Calificación (1.0 - 5.0)")
+              .setStyle(TextInputStyle.Short)
+              .setPlaceholder("Ej: 4.5 (decimales permitidos)")
+              .setMinLength(1)
+              .setMaxLength(4)
+              .setRequired(true)
+          )
+        );
+
+        return i.showModal(modal);
+      }
+    }
+
+    // MODAL SUBMISSIONS
+    if (i.isModalSubmit()) {
+      // REVIEW MODAL
+      if (i.customId.startsWith("modal_")) {
+        const parts = i.customId.split("_");
+        const targetId = parts[1];
+        const roleId = parts[2];
+        const authorId = parts[3];
+
+        const text = i.fields.getTextInputValue("text");
+        const ratingInput = i.fields.getTextInputValue("stars");
+        const rating = utils.validateRating(ratingInput);
+
+        if (!rating) {
+          cooldowns.clearAttempt(i.user.id);
+          return i.reply({ 
+            content: "❌ Calificación inválida. Usa números entre 1.0 y 5.0 (ej: 4.5)", 
+            ephemeral: true 
+          });
+        }
+
+        if (text.length < config.minReviewLength || text.length > config.maxReviewLength) {
+          cooldowns.clearAttempt(i.user.id);
+          return i.reply({ 
+            content: `❌ La reseña debe tener entre ${config.minReviewLength} y ${config.maxReviewLength} caracteres.`, 
+            ephemeral: true 
+          });
+        }
+
+        try {
+          const target = await i.guild.members.fetch(targetId);
+          const targetRole = config.roleMapping[roleId];
+
+          if (!targetRole) {
+            cooldowns.clearAttempt(i.user.id);
+            return i.reply({ content: "❌ Rol no válido", ephemeral: true });
+          }
+
+          cooldowns.setCooldown(i.user.id);
+
+          db.addReview(targetId, {
+            author: i.user.id,
+            authorName: i.user.username,
+            targetName: target.user.username,
+            roleId: roleId,
+            roleName: targetRole.name,
+            rating,
+            text,
+            date: Date.now()
+          });
+
+          const targetRoles = utils.getUserRoles(target);
+          const roleIds = targetRoles.map(r => r.id);
+          const unlockedAchievements = checkAndUnlockAchievements(db, targetId, roleIds);
+
+          const logChannel = await client.channels.fetch(config.logChannelId).catch(() => null);
+          if (logChannel && logChannel.isTextBased()) {
+            const logEmbed = new EmbedBuilder()
+              .setTitle("📥 Nueva Reseña Registrada")
+              .addFields(
+                { name: "Para", value: `${target.user.username} (${targetRole.emoji} ${targetRole.name})`, inline: true },
+                { name: "Calificación", value: `${config.stars.icon} ${rating}/5`, inline: true },
+                { name: "Por", value: i.user.username, inline: true }
+              )
+              .setColor(rating >= 4 ? "Green" : rating >= 3 ? "Yellow" : "Red")
+              .setTimestamp();
+
+            if (unlockedAchievements.length > 0) {
+              logEmbed.addFields({
+                name: "🏆 Logros Desbloqueados",
+                value: unlockedAchievements.map(a => a.name).join(", ")
+              });
+            }
+
+            await logChannel.send({ embeds: [logEmbed] }).catch(() => {});
+          }
+
+          cooldowns.clearAttempt(i.user.id);
+
+          return i.reply({ 
+            content: `✅ ¡Reseña registrada correctamente! Has calificado a ${target.user.username} con ${rating}/5 estrellas.`, 
+            ephemeral: true 
+          });
+
+        } catch (error) {
+          logger.error(`Error procesando reseña: ${error.message}`);
+          cooldowns.clearAttempt(i.user.id);
+          return i.reply({ 
+            content: "❌ Error al procesar tu reseña. Intenta de nuevo.", 
+            ephemeral: true 
+          });
+        }
+      }
+
+      // REPORT MODAL
+      else if (i.customId.startsWith("report_modal_")) {
+        const parts = i.customId.split("_");
+        const userId = parts[2];
+        const authorId = parts[3];
+
+        const reason = i.fields.getTextInputValue("reason");
+
+        try {
+          reports.add({
+            userId,
+            reportedBy: i.user.id,
+            reportedByName: i.user.username,
+            reason,
+            date: Date.now()
+          });
+
+          db.ensureUser(userId);
+          db.data[userId].reported = (db.data[userId].reported || 0) + 1;
+          db.save();
+
+          const logChannel = await client.channels.fetch(config.logChannelId).catch(() => null);
+          if (logChannel && logChannel.isTextBased()) {
+            const repEmbed = new EmbedBuilder()
+              .setTitle("🚩 Nuevo Reporte")
+              .addFields(
+                { name: "Usuario Reportado", value: `<@${userId}>`, inline: true },
+                { name: "Reportado por", value: i.user.username, inline: true },
+                { name: "Razón", value: reason.substring(0, 500), inline: false }
+              )
+              .setColor("Red")
+              .setTimestamp();
+
+            await logChannel.send({ embeds: [repEmbed] }).catch(() => {});
+          }
+
+          return i.reply({ 
+            content: "✅ Reporte enviado correctamente. Los administradores lo revisarán pronto.", 
+            ephemeral: true 
+          });
+
+        } catch (error) {
+          logger.error(`Error en reporte: ${error.message}`);
+          return i.reply({ 
+            content: "❌ Error al enviar reporte", 
+            ephemeral: true 
+          });
+        }
+      }
+    }
+
   } catch (err) {
     logger.error(`Error en interactionCreate: ${err.message}`);
     if (i.user) cooldowns.clearAttempt(i.user.id);
@@ -1779,13 +2283,16 @@ setInterval(() => {
   reports.save();
 }, 30000);
 
-/* ================= EXPORTAR CLIENTE ================= */
-// Exportar el cliente para que server.js pueda usarlo
-module.exports = { 
-  client,
-  config,
-  logger,
-  db,
-  reports,
-  ACHIEVEMENTS 
-};
+/* ================= LOGIN ================= */
+if (config.token && config.token !== "") {
+  client.login(config.token).catch(error => {
+    logger.error(`❌ Error al iniciar el bot: ${error.message}`);
+    process.exit(1);
+  });
+} else {
+  logger.error('❌ No se encontró el token de Discord en las variables de entorno');
+  console.log('ℹ️ Añade DISCORD_TOKEN en el archivo .env');
+}
+
+// Exportar para server.js
+module.exports = { client };
