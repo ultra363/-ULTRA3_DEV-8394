@@ -6,8 +6,8 @@ require('dotenv').config();
 const app = express();
 const PORT = process.env.PORT || 3000;
 
-// Importar el bot principal
-const { client } = require('./index.js');
+// Importar el bot desde bot.js
+require('./bot.js');
 
 // Variables de estado del bot
 let botStatus = {
@@ -19,52 +19,11 @@ let botStatus = {
   reviewsCount: 0
 };
 
-// Configuración del bot
-const config = {
-  token: process.env.DISCORD_TOKEN || "",
-  prefix: "."
-};
-
-// Eventos del bot
-client.once('ready', () => {
-  console.log(`✅ Bot conectado como: ${client.user.tag}`);
-  console.log(`✅ ZERO MEGA 2.0.4 PLUS ++++ OMEGA ACTIVO`);
-  
-  botStatus.isReady = true;
-  botStatus.startTime = new Date();
-  botStatus.guildCount = client.guilds.cache.size;
-  botStatus.userCount = client.guilds.cache.reduce((acc, guild) => acc + guild.memberCount, 0);
-  
-  // Contar reseñas
-  try {
-    const reviews = JSON.parse(fs.readFileSync('reviews.json', 'utf8'));
-    botStatus.reviewsCount = Object.values(reviews).reduce((acc, user) => 
-      acc + (user.reviews ? user.reviews.length : 0), 0);
-  } catch (e) {
-    botStatus.reviewsCount = 0;
-  }
-  
-  // Actividad del bot
-  client.user.setActivity(`${config.prefix}perfil | /perfil`, { type: "LISTENING" });
-  
-  // Actualizar tiempo activo cada minuto
-  setInterval(() => {
-    if (botStatus.startTime) {
-      botStatus.uptime = Date.now() - botStatus.startTime;
-    }
-  }, 60000);
-});
-
-client.on('error', (error) => {
-  console.error('❌ Error del cliente Discord:', error);
-  botStatus.lastError = error.message;
-});
-
 // Middleware básico
 app.use(express.json());
 app.use(express.static('public'));
 
-// Rutas del servidor web
+// Ruta principal - Dashboard
 app.get('/', (req, res) => {
   const uptime = botStatus.startTime ? Math.floor((Date.now() - botStatus.startTime) / 1000) : 0;
   
@@ -406,29 +365,21 @@ app.get('/backup', (req, res) => {
 const server = app.listen(PORT, () => {
   console.log(`🌐 Servidor web iniciado en el puerto ${PORT}`);
   console.log(`📊 Dashboard disponible en: http://localhost:${PORT}`);
-  
-  // Iniciar el bot de Discord si hay token
-  if (config.token && config.token !== "") {
-    client.login(config.token).catch(error => {
-      console.error('❌ Error al iniciar el bot:', error.message);
-    });
-  } else {
-    console.error('❌ No se encontró el token de Discord en las variables de entorno');
-    console.log('ℹ️ Añade DISCORD_TOKEN en las variables de entorno de Render');
-  }
 });
+
+// Función para actualizar estado del bot
+function updateBotStatus(status) {
+  botStatus = { ...botStatus, ...status };
+}
 
 // Manejo de cierre elegante
 process.on('SIGTERM', () => {
   console.log('⚠️ SIGTERM recibido. Cerrando servidor...');
-  
-  if (client && client.destroy) {
-    client.destroy();
-    console.log('👋 Bot de Discord desconectado');
-  }
-  
   server.close(() => {
     console.log('🛑 Servidor HTTP cerrado');
     process.exit(0);
   });
 });
+
+// Exportar función para actualizar estado
+module.exports = { updateBotStatus };
