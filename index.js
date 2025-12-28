@@ -1,4 +1,4 @@
-// index.js - ZERO MEGA 2.0.5 PLUS ++++ OMEGA (NO ERRORS FINAL)
+// index.js - ZERO MEGA 2.0.5 PLUS ++++ OMEGA CORREGIDO
 const {
   Client,
   GatewayIntentBits,
@@ -13,8 +13,8 @@ const {
   REST,
   Routes,
   PermissionFlagsBits,
-  StringSelectMenuBuilder,
-  MessageFlags
+  StringSelectMenuBuilder
+  // ELIMINADO: MessageFlags - No existe en v14
 } = require("discord.js");
 const fs = require("fs");
 const path = require("path");
@@ -1233,11 +1233,11 @@ client.on("interactionCreate", async (i) => {
       if (cmd === "perfil") {
         const targetUser = i.options.getUser("usuario");
         const member = await i.guild.members.fetch(targetUser.id).catch(() => null);
-        if (!member) return i.reply({ content: "❌ Usuario no encontrado", flags: MessageFlags.Ephemeral });
+        if (!member) return i.reply({ content: "❌ Usuario no encontrado", ephemeral: true });
 
         const roles = utils.getUserRoles(member);
         if (roles.length === 0) {
-          return i.reply({ content: "❌ El usuario no tiene roles válidos.", flags: MessageFlags.Ephemeral });
+          return i.reply({ content: "❌ El usuario no tiene roles válidos.", ephemeral: true });
         }
 
         const userData = db.get(member.id) || { reviews: [], stars: {}, reported: 0 };
@@ -1332,7 +1332,7 @@ client.on("interactionCreate", async (i) => {
         }
 
         const top = db.getTopByRole(roleId, type);
-        if (top.length === 0) return i.reply({ content: "❌ No hay reseñas registradas.", flags: MessageFlags.Ephemeral });
+        if (top.length === 0) return i.reply({ content: "❌ No hay reseñas registradas.", ephemeral: true });
 
         const embed = new EmbedBuilder()
           .setTitle(title)
@@ -1355,8 +1355,226 @@ client.on("interactionCreate", async (i) => {
         return i.reply({ embeds: [embed], components: [buttonRow] });
       }
 
-      // Otros comandos slash (similares a los de prefix)
-      // ... (implementar según necesidad, similar a los de arriba)
+      // ESTADISTICAS (slash)
+      else if (cmd === "estadisticas") {
+        const roleArg = i.options.getString("rol");
+        const roleMap = { 
+          staff: "1430002824305180814", 
+          trial: "1432195295378407454", 
+          helper: "1446861161088684164", 
+          mm: "1430002835910561903" 
+        };
+
+        const roleId = roleMap[roleArg];
+        if (!roleId) return i.reply({ content: "❌ Rol no válido.", ephemeral: true });
+
+        const roleInfo = config.roleMapping[roleId];
+        const stats = db.getStatsByRole(roleId);
+
+        const embed = new EmbedBuilder()
+          .setTitle(`${roleInfo.emoji} Estadísticas - ${roleInfo.name}`)
+          .addFields(
+            { name: "👥 Usuarios Activos", value: `${stats.totalUsers}`, inline: true },
+            { name: "📝 Total Reseñas", value: `${stats.totalReviews}`, inline: true },
+            { name: "⭐ Promedio", value: `${stats.avgRating}/5`, inline: true },
+            { name: "👍 Recomendadas", value: `${stats.recommended}`, inline: true },
+            { name: "📛 Críticas", value: `${stats.negative}`, inline: true },
+            { name: "🛡️ Confianza", value: `${stats.avgTrust}%`, inline: true },
+            { name: "🏆 Mejor Calificado", value: stats.bestRated, inline: true },
+            { name: "📊 5 Estrellas", value: `${stats.mostRated}%`, inline: true }
+          )
+          .setColor(roleInfo.color === "Gold" ? "#ffd700" : 
+                    roleInfo.color === "Blue" ? "#00a8ff" :
+                    roleInfo.color === "Green" ? "#00ff9d" : "#b967ff")
+          .setFooter({ text: "ZERO MEGA 2.0.5 | Estadísticas balanceadas" })
+          .setTimestamp();
+
+        return i.reply({ embeds: [embed] });
+      }
+
+      // LOGROS (slash)
+      else if (cmd === "logros") {
+        const targetUser = i.options.getUser("usuario") || i.user;
+        const member = await i.guild.members.fetch(targetUser.id).catch(() => null);
+
+        if (!member) return i.reply({ content: "❌ Usuario no encontrado.", ephemeral: true });
+
+        const roles = utils.getUserRoles(member);
+        if (roles.length === 0) return i.reply({ content: "❌ Este usuario no tiene roles válidos.", ephemeral: true });
+
+        const embed = new EmbedBuilder()
+          .setTitle(`🏆 Logros de ${member.user.username}`)
+          .setDescription(`Selecciona un rol para ver los logros específicos:`)
+          .setColor("#00ff9d")
+          .setTimestamp();
+
+        const buttons = [
+          new ButtonBuilder()
+            .setCustomId(`back_${member.id}_${i.user.id}`)
+            .setLabel("👤 Perfil")
+            .setStyle(ButtonStyle.Secondary)
+        ];
+
+        for (const role of roles) {
+          buttons.push(
+            new ButtonBuilder()
+              .setCustomId(`achrole_${member.id}_${role.id}_${i.user.id}`)
+              .setLabel(`${role.emoji} ${role.name}`)
+              .setStyle(ButtonStyle.Primary)
+          );
+        }
+
+        const rows = [];
+        for (let idx = 0; idx < buttons.length; idx += 5) {
+          rows.push(new ActionRowBuilder().addComponents(buttons.slice(idx, idx + 5)));
+        }
+
+        return i.reply({ embeds: [embed], components: rows });
+      }
+
+      // AYUDA (slash)
+      else if (cmd === "ayuda") {
+        const embed = new EmbedBuilder()
+          .setTitle("❓ ZERO MEGA 2.0.5 - Sistema de Ayuda")
+          .setDescription("**Sistema dual:** Usa comandos `.` (prefix) o `/` (slash)")
+          .addFields(
+            { 
+              name: "📋 Comandos Disponibles", 
+              value: [
+                "`.perfil @usuario` - Ver perfil completo",
+                "`.top [stars/reviews] [rol]` - Top 10 usuarios",
+                "`.estadisticas <rol>` - Estadísticas por rol",
+                "`.logros [@usuario]` - Ver logros",
+                "`.ayuda` - Esta ayuda",
+                "`.version` - Información del bot",
+                "`.global` - Estadísticas globales",
+                "`.reseñas @usuario` - Ver reseñas"
+              ].join("\n")
+            },
+            { 
+              name: "⭐ Novedades 2.0.5", 
+              value: [
+                "• **Dashboard Web Neon** - Interfaz mejorada",
+                "• **Base de datos optimizada** - Más rápida y segura",
+                "• **Sin errores de flags** - Todo corregido",
+                "• **Mejor sistema de logros** - Más intuitivo",
+                "• **Estadísticas en tiempo real** - Web actualizada",
+                "• **Backup automático** - Datos protegidos"
+              ].join("\n")
+            }
+          )
+          .setColor("#00f3ff")
+          .setFooter({ text: "Versión 2.0.5 PLUS ++++ OMEGA" })
+          .setTimestamp();
+
+        return i.reply({ embeds: [embed] });
+      }
+
+      // VERSION (slash)
+      else if (cmd === "version") {
+        const embed = new EmbedBuilder()
+          .setTitle("🤖 ZERO MEGA 2.0.5 PLUS ++++ OMEGA")
+          .setDescription("Sistema de Reseñas Ultra Avanzado - Sin Errores")
+          .addFields(
+            { name: "Versión", value: "2.0.5 PLUS ++++ OMEGA", inline: true },
+            { name: "Estado", value: "✅ Sin errores", inline: true },
+            { name: "Developer", value: "ultra3_dev", inline: true },
+            { 
+              name: "🚀 Mejoras Implementadas", 
+              value: [
+                "1. **Dashboard Web Neon** - Interfaz moderna con efectos",
+                "2. **Base de datos JSON optimizada** - Más eficiente",
+                "3. **Corrección de flags** - Sin warnings",
+                "4. **Sistema de backup mejorado** - Datos seguros",
+                "5. **Estadísticas en tiempo real** - Web actualizada",
+                "6. **Mantenimiento automático** - Sin caídas"
+              ].join("\n\n")
+            }
+          )
+          .setColor("#b967ff")
+          .setFooter({ text: "Actualizado: " + new Date().toLocaleDateString() })
+          .setTimestamp();
+
+        return i.reply({ embeds: [embed] });
+      }
+
+      // GLOBAL (slash)
+      else if (cmd === "global") {
+        const stats = db.getGlobalStats();
+
+        const embed = new EmbedBuilder()
+          .setTitle("🌍 Estadísticas Globales del Sistema")
+          .addFields(
+            { name: "👥 Usuarios Registrados", value: `${stats.totalUsers}`, inline: true },
+            { name: "📈 Usuarios Activos", value: `${stats.activeUsers}`, inline: true },
+            { name: "📝 Total Reseñas", value: `${stats.totalReviews}`, inline: true },
+            { name: "⭐ Promedio Global", value: `${stats.avgRating}/5`, inline: true },
+            { name: "🚩 Reportes Totales", value: `${stats.totalReports}`, inline: true },
+            { name: "🏆 Logros Desbloqueados", value: `${stats.totalAchievements}`, inline: true }
+          )
+          .setColor("#00ff9d")
+          .setFooter({ text: "ZERO MEGA 2.0.5 - Sin errores" })
+          .setTimestamp();
+
+        return i.reply({ embeds: [embed] });
+      }
+
+      // RESEÑAS (slash)
+      else if (cmd === "reseñas") {
+        const targetUser = i.options.getUser("usuario");
+        const page = i.options.getInteger("pagina") || 1;
+
+        if (!targetUser) return i.reply({ content: "❌ Debes mencionar un usuario.", ephemeral: true });
+
+        const member = await i.guild.members.fetch(targetUser.id).catch(() => null);
+        if (!member) return i.reply({ content: "❌ Usuario no encontrado.", ephemeral: true });
+
+        const userData = db.get(member.id);
+        if (!userData || !userData.reviews || userData.reviews.length === 0) {
+          return i.reply({ content: `❌ ${member.user.username} no tiene reseñas registradas.`, ephemeral: true });
+        }
+
+        const perPage = 5;
+        const totalReviews = userData.reviews.length;
+        const totalPages = Math.ceil(totalReviews / perPage);
+        const currentPage = Math.min(Math.max(page, 1), totalPages);
+        const startIdx = (currentPage - 1) * perPage;
+        const endIdx = startIdx + perPage;
+        const pageReviews = userData.reviews.slice(startIdx, endIdx).reverse();
+
+        const embed = new EmbedBuilder()
+          .setTitle(`📝 Reseñas de ${member.user.username}`)
+          .setDescription(`**Página ${currentPage}/${totalPages}** • ${totalReviews} reseñas totales`)
+          .setColor("#ffaa00")
+          .setThumbnail(member.user.displayAvatarURL({ size: 128 }))
+          .setTimestamp();
+
+        pageReviews.forEach((review, idx) => {
+          const date = new Date(review.timestamp || review.date);
+          const roleInfo = config.roleMapping[review.roleId] || { name: "Rol", emoji: "❓" };
+
+          embed.addFields({
+            name: `${config.stars.icon.repeat(Math.round(review.rating || 0))} ${review.rating || 0}/5 • ${roleInfo.emoji} ${roleInfo.name}`,
+            value: `**Por:** ${review.authorName || "Anónimo"}\n**Fecha:** ${date.toLocaleDateString()}\n**Comentario:** ${(review.text || "").substring(0, 150)}${review.text?.length > 150 ? '...' : ''}`,
+            inline: false
+          });
+        });
+
+        const row = new ActionRowBuilder().addComponents(
+          new ButtonBuilder()
+            .setCustomId(`prev_${member.id}_${currentPage}_${i.user.id}`)
+            .setLabel("◀️ Anterior")
+            .setStyle(ButtonStyle.Primary)
+            .setDisabled(currentPage <= 1),
+          new ButtonBuilder()
+            .setCustomId(`next_${member.id}_${currentPage}_${i.user.id}`)
+            .setLabel("Siguiente ▶️")
+            .setStyle(ButtonStyle.Primary)
+            .setDisabled(currentPage >= totalPages)
+        );
+
+        return i.reply({ embeds: [embed], components: [row] });
+      }
     }
 
     // BOTONES
@@ -1369,7 +1587,7 @@ client.on("interactionCreate", async (i) => {
       if (i.user.id !== authorId) {
         return i.reply({ 
           content: "❌ Solo el autor de este mensaje puede usar estos botones.", 
-          flags: MessageFlags.Ephemeral 
+          ephemeral: true 
         });
       }
 
@@ -1380,7 +1598,7 @@ client.on("interactionCreate", async (i) => {
         if (cooldowns.hasRecentAttempt(i.user.id)) {
           return i.reply({ 
             content: "⚠️ Ya tienes un formulario de reseña abierto. Cierra el anterior primero.", 
-            flags: MessageFlags.Ephemeral 
+            ephemeral: true 
           });
         }
 
@@ -1392,19 +1610,19 @@ client.on("interactionCreate", async (i) => {
 
         if (!target || !targetRoles.length) {
           cooldowns.clearAttempt(i.user.id);
-          return i.reply({ content: "❌ Usuario no válido", flags: MessageFlags.Ephemeral });
+          return i.reply({ content: "❌ Usuario no válido", ephemeral: true });
         }
 
         if (target.id === i.user.id) {
           cooldowns.clearAttempt(i.user.id);
-          return i.reply({ content: "❌ No puedes reseñarte a ti mismo", flags: MessageFlags.Ephemeral });
+          return i.reply({ content: "❌ No puedes reseñarte a ti mismo", ephemeral: true });
         }
 
         if (!utils.isValidAlt(member)) {
           cooldowns.clearAttempt(i.user.id);
           return i.reply({ 
             content: "🛑 Requisitos: +7 días de antigüedad, avatar personalizado, 2+ roles en el servidor", 
-            flags: MessageFlags.Ephemeral 
+            ephemeral: true 
           });
         }
 
@@ -1413,7 +1631,7 @@ client.on("interactionCreate", async (i) => {
           cooldowns.clearAttempt(i.user.id);
           return i.reply({ 
             content: `⏳ Espera ${utils.formatTime(cd.remaining)} antes de dejar otra reseña.`, 
-            flags: MessageFlags.Ephemeral 
+            ephemeral: true 
           });
         }
 
@@ -1422,7 +1640,7 @@ client.on("interactionCreate", async (i) => {
           cooldowns.clearAttempt(i.user.id);
           return i.reply({ 
             content: `⚠️ Ya reseñaste a este usuario recientemente. Espera ${utils.formatTime(expiry - Date.now())}.`, 
-            flags: MessageFlags.Ephemeral 
+            ephemeral: true 
           });
         }
 
@@ -1447,7 +1665,7 @@ client.on("interactionCreate", async (i) => {
             .setColor("#00a8ff")
             .setTimestamp();
 
-          return i.reply({ embeds: [embed], components: [row], flags: MessageFlags.Ephemeral });
+          return i.reply({ embeds: [embed], components: [row], ephemeral: true });
         }
 
         const targetRole = targetRoles[0];
@@ -1505,6 +1723,181 @@ client.on("interactionCreate", async (i) => {
         return i.showModal(modal);
       }
 
+      // ACHIEVEMENTS BUTTON
+      else if (buttonType === "achievements") {
+        const targetId = parts[1];
+        const target = await i.guild.members.fetch(targetId).catch(() => null);
+        
+        if (!target) return i.reply({ content: "❌ Usuario no encontrado.", ephemeral: true });
+
+        const roles = utils.getUserRoles(target);
+        if (roles.length === 0) return i.reply({ content: "❌ Este usuario no tiene roles válidos.", ephemeral: true });
+
+        const embed = new EmbedBuilder()
+          .setTitle(`🏆 Logros de ${target.user.username}`)
+          .setDescription(`Selecciona un rol para ver los logros específicos:`)
+          .setColor("#00ff9d")
+          .setTimestamp();
+
+        const buttons = [
+          new ButtonBuilder()
+            .setCustomId(`back_${target.id}_${authorId}`)
+            .setLabel("👤 Perfil")
+            .setStyle(ButtonStyle.Secondary)
+        ];
+
+        for (const role of roles) {
+          buttons.push(
+            new ButtonBuilder()
+              .setCustomId(`achrole_${target.id}_${role.id}_${authorId}`)
+              .setLabel(`${role.emoji} ${role.name}`)
+              .setStyle(ButtonStyle.Primary)
+          );
+        }
+
+        const rows = [];
+        for (let idx = 0; idx < buttons.length; idx += 5) {
+          rows.push(new ActionRowBuilder().addComponents(buttons.slice(idx, idx + 5)));
+        }
+
+        return i.update({ embeds: [embed], components: rows });
+      }
+
+      // BACK BUTTON (to profile)
+      else if (buttonType === "back") {
+        const targetId = parts[1];
+        const target = await i.guild.members.fetch(targetId).catch(() => null);
+        
+        if (!target) return i.reply({ content: "❌ Usuario no encontrado.", ephemeral: true });
+
+        const roles = utils.getUserRoles(target);
+        if (roles.length === 0) return i.reply({ content: "❌ Este usuario no tiene roles válidos.", ephemeral: true });
+
+        const userData = db.get(target.id) || { reviews: [], stars: {}, reported: 0 };
+        const stats = utils.calculateStarDistribution(userData.reviews);
+
+        const total = userData.reviews ? userData.reviews.length : 0;
+        const avg = total > 0 ? 
+          (userData.reviews.reduce((s, r) => s + (r.rating || 0), 0) / total).toFixed(2) : 
+          "0.00";
+
+        const recommended = (userData.stars[4] || 0) + (userData.stars[5] || 0);
+        const negative = (userData.stars[1] || 0) + (userData.stars[2] || 0);
+        const trust = total > 0 ? Math.round((recommended / total) * 100) : 100;
+
+        const roleNames = roles.map(r => `${r.emoji} ${r.name}`).join(", ");
+
+        const userAchievements = db.getAchievements(target.id);
+        const userRoles = roles.map(r => r.name);
+        const achievementsForRoles = ACHIEVEMENTS.filter(a => userRoles.includes(a.role));
+        const unlockedCount = userAchievements.filter(a => 
+          achievementsForRoles.some(ach => ach.id === a.id)
+        ).length;
+
+        let description = total === 0 ? 
+          `${config.stars.icon} **Sin reseñas aún**` : 
+          `${config.stars.icon} **Calificación:** \`${avg}/5\`\n${utils.createStarsBar(parseFloat(avg))}`;
+
+        let starDistribution = "";
+        for (let i = 5; i >= 1; i--) {
+          const count = stats.distribution[i] || 0;
+          const percent = stats.percentages[i] || "0.0";
+          const bar = utils.createStarPercentageBar(percent);
+          starDistribution += `${config.stars.icon.repeat(i)} ${bar} ${percent}% (${count})\n`;
+        }
+
+        const embed = new EmbedBuilder()
+          .setTitle(`${config.stars.animated} ${target.user.username}`)
+          .setDescription(description)
+          .addFields(
+            { name: "📋 Roles", value: roleNames, inline: false },
+            { name: "📝 Reseñas", value: `${total}`, inline: true },
+            { name: "⭐ Promedio", value: `${avg}/5`, inline: true },
+            { name: "👍 Recomendadas", value: `${recommended}`, inline: true },
+            { name: "🛡️ Confianza", value: `${trust}%`, inline: true },
+            { name: "📛 Críticas", value: `${negative}`, inline: true },
+            { name: "🏆 Logros", value: `${unlockedCount}/${achievementsForRoles.length}`, inline: true },
+            { name: "📊 Distribución", value: starDistribution || "Sin reseñas", inline: false }
+          )
+          .setColor(utils.getRatingColor(parseFloat(avg)))
+          .setThumbnail(target.user.displayAvatarURL({ size: 256 }))
+          .setFooter({ text: "ZERO MEGA 2.0.5" })
+          .setTimestamp();
+
+        const row = new ActionRowBuilder().addComponents(
+          new ButtonBuilder()
+            .setCustomId(`review_${target.id}_${authorId}`)
+            .setLabel("✍️ Reseña")
+            .setStyle(ButtonStyle.Primary),
+          new ButtonBuilder()
+            .setCustomId(`report_${target.id}_${authorId}`)
+            .setLabel("🚩 Reportar")
+            .setStyle(ButtonStyle.Danger),
+          new ButtonBuilder()
+            .setCustomId(`achievements_${target.id}_${authorId}`)
+            .setLabel("🏆 Logros")
+            .setStyle(ButtonStyle.Success)
+        );
+
+        return i.update({ embeds: [embed], components: [row] });
+      }
+
+      // ACHROLE BUTTON (view achievements for specific role)
+      else if (buttonType === "achrole") {
+        const targetId = parts[1];
+        const roleId = parts[2];
+        
+        const target = await i.guild.members.fetch(targetId).catch(() => null);
+        if (!target) return i.reply({ content: "❌ Usuario no encontrado.", ephemeral: true });
+
+        const roleInfo = config.roleMapping[roleId];
+        if (!roleInfo) return i.reply({ content: "❌ Rol no válido.", ephemeral: true });
+
+        const roleAchievements = ACHIEVEMENTS.filter(a => a.role === roleInfo.name);
+        const userAchievements = db.getAchievements(targetId);
+        const unlockedIds = userAchievements.map(a => a.id);
+
+        const unlockedForRole = roleAchievements.filter(a => unlockedIds.includes(a.id));
+        const pendingForRole = roleAchievements.filter(a => !unlockedIds.includes(a.id));
+
+        const embed = new EmbedBuilder()
+          .setTitle(`${roleInfo.emoji} Logros de ${roleInfo.name} - ${target.user.username}`)
+          .setDescription(`**Desbloqueados:** ${unlockedForRole.length}/9\n**Pendientes:** ${pendingForRole.length}\n\n*Cada rol tiene 9 logros con diferentes dificultades*`)
+          .setColor(roleInfo.color === "Gold" ? "#ffd700" : 
+                    roleInfo.color === "Blue" ? "#00a8ff" :
+                    roleInfo.color === "Green" ? "#00ff9d" : "#b967ff")
+          .setTimestamp();
+
+        if (unlockedForRole.length > 0) {
+          embed.addFields({
+            name: "✅ Desbloqueados",
+            value: unlockedForRole.map(a => 
+              `${a.emoji} **${a.name}**\n${a.description} (*${a.difficulty}*)`
+            ).join("\n\n"),
+            inline: true
+          });
+        }
+
+        if (pendingForRole.length > 0) {
+          embed.addFields({
+            name: "🔒 Pendientes",
+            value: pendingForRole.map(a => 
+              `🔒 **${a.name}**\n${a.description} (*${a.difficulty}*)`
+            ).join("\n\n"),
+            inline: true
+          });
+        }
+
+        const row = new ActionRowBuilder().addComponents(
+          new ButtonBuilder()
+            .setCustomId(`back_${targetId}_${authorId}`)
+            .setLabel("👤 Volver al Perfil")
+            .setStyle(ButtonStyle.Secondary)
+        );
+
+        return i.update({ embeds: [embed], components: [row] });
+      }
+
       // TOP SWITCH
       else if (buttonType === "top") {
         const roleArg = parts[1];
@@ -1554,6 +1947,177 @@ client.on("interactionCreate", async (i) => {
 
         return i.update({ embeds: [embed], components: [buttonRow] });
       }
+
+      // PREV PAGE (reviews)
+      else if (buttonType === "prev") {
+        const targetId = parts[1];
+        const currentPage = parseInt(parts[2]);
+        
+        if (currentPage <= 1) return i.deferUpdate();
+
+        const target = await i.guild.members.fetch(targetId).catch(() => null);
+        if (!target) return i.reply({ content: "❌ Usuario no encontrado.", ephemeral: true });
+
+        const userData = db.get(target.id);
+        if (!userData || !userData.reviews || userData.reviews.length === 0) {
+          return i.update({ content: `❌ ${target.user.username} no tiene reseñas registradas.`, components: [] });
+        }
+
+        const perPage = 5;
+        const totalReviews = userData.reviews.length;
+        const totalPages = Math.ceil(totalReviews / perPage);
+        const newPage = currentPage - 1;
+        const startIdx = (newPage - 1) * perPage;
+        const endIdx = startIdx + perPage;
+        const pageReviews = userData.reviews.slice(startIdx, endIdx).reverse();
+
+        const embed = new EmbedBuilder()
+          .setTitle(`📝 Reseñas de ${target.user.username}`)
+          .setDescription(`**Página ${newPage}/${totalPages}** • ${totalReviews} reseñas totales`)
+          .setColor("#ffaa00")
+          .setThumbnail(target.user.displayAvatarURL({ size: 128 }))
+          .setTimestamp();
+
+        pageReviews.forEach((review, idx) => {
+          const date = new Date(review.timestamp || review.date);
+          const roleInfo = config.roleMapping[review.roleId] || { name: "Rol", emoji: "❓" };
+
+          embed.addFields({
+            name: `${config.stars.icon.repeat(Math.round(review.rating || 0))} ${review.rating || 0}/5 • ${roleInfo.emoji} ${roleInfo.name}`,
+            value: `**Por:** ${review.authorName || "Anónimo"}\n**Fecha:** ${date.toLocaleDateString()}\n**Comentario:** ${(review.text || "").substring(0, 150)}${review.text?.length > 150 ? '...' : ''}`,
+            inline: false
+          });
+        });
+
+        const row = new ActionRowBuilder().addComponents(
+          new ButtonBuilder()
+            .setCustomId(`prev_${target.id}_${newPage}_${authorId}`)
+            .setLabel("◀️ Anterior")
+            .setStyle(ButtonStyle.Primary)
+            .setDisabled(newPage <= 1),
+          new ButtonBuilder()
+            .setCustomId(`next_${target.id}_${newPage}_${authorId}`)
+            .setLabel("Siguiente ▶️")
+            .setStyle(ButtonStyle.Primary)
+            .setDisabled(newPage >= totalPages)
+        );
+
+        return i.update({ embeds: [embed], components: [row] });
+      }
+
+      // NEXT PAGE (reviews)
+      else if (buttonType === "next") {
+        const targetId = parts[1];
+        const currentPage = parseInt(parts[2]);
+        
+        const target = await i.guild.members.fetch(targetId).catch(() => null);
+        if (!target) return i.reply({ content: "❌ Usuario no encontrado.", ephemeral: true });
+
+        const userData = db.get(target.id);
+        if (!userData || !userData.reviews || userData.reviews.length === 0) {
+          return i.update({ content: `❌ ${target.user.username} no tiene reseñas registradas.`, components: [] });
+        }
+
+        const perPage = 5;
+        const totalReviews = userData.reviews.length;
+        const totalPages = Math.ceil(totalReviews / perPage);
+        
+        if (currentPage >= totalPages) return i.deferUpdate();
+        
+        const newPage = currentPage + 1;
+        const startIdx = (newPage - 1) * perPage;
+        const endIdx = startIdx + perPage;
+        const pageReviews = userData.reviews.slice(startIdx, endIdx).reverse();
+
+        const embed = new EmbedBuilder()
+          .setTitle(`📝 Reseñas de ${target.user.username}`)
+          .setDescription(`**Página ${newPage}/${totalPages}** • ${totalReviews} reseñas totales`)
+          .setColor("#ffaa00")
+          .setThumbnail(target.user.displayAvatarURL({ size: 128 }))
+          .setTimestamp();
+
+        pageReviews.forEach((review, idx) => {
+          const date = new Date(review.timestamp || review.date);
+          const roleInfo = config.roleMapping[review.roleId] || { name: "Rol", emoji: "❓" };
+
+          embed.addFields({
+            name: `${config.stars.icon.repeat(Math.round(review.rating || 0))} ${review.rating || 0}/5 • ${roleInfo.emoji} ${roleInfo.name}`,
+            value: `**Por:** ${review.authorName || "Anónimo"}\n**Fecha:** ${date.toLocaleDateString()}\n**Comentario:** ${(review.text || "").substring(0, 150)}${review.text?.length > 150 ? '...' : ''}`,
+            inline: false
+          });
+        });
+
+        const row = new ActionRowBuilder().addComponents(
+          new ButtonBuilder()
+            .setCustomId(`prev_${target.id}_${newPage}_${authorId}`)
+            .setLabel("◀️ Anterior")
+            .setStyle(ButtonStyle.Primary)
+            .setDisabled(newPage <= 1),
+          new ButtonBuilder()
+            .setCustomId(`next_${target.id}_${newPage}_${authorId}`)
+            .setLabel("Siguiente ▶️")
+            .setStyle(ButtonStyle.Primary)
+            .setDisabled(newPage >= totalPages)
+        );
+
+        return i.update({ embeds: [embed], components: [row] });
+      }
+    }
+
+    // SELECT MENUS
+    if (i.isStringSelectMenu()) {
+      const parts = i.customId.split("_");
+      const menuType = parts[0];
+      
+      if (menuType === "selectrole") {
+        const targetId = parts[1];
+        const authorId = parts[2];
+        
+        if (i.user.id !== authorId) {
+          return i.reply({ 
+            content: "❌ Solo el autor de este mensaje puede usar este menú.", 
+            ephemeral: true 
+          });
+        }
+        
+        const roleId = i.values[0];
+        const target = await i.guild.members.fetch(targetId).catch(() => null);
+        const targetRole = config.roleMapping[roleId];
+        
+        if (!target || !targetRole) {
+          cooldowns.clearAttempt(i.user.id);
+          return i.reply({ content: "❌ Rol o usuario no válido", ephemeral: true });
+        }
+        
+        const modal = new ModalBuilder()
+          .setCustomId(`modal_${targetId}_${roleId}_${authorId}`)
+          .setTitle(`Reseña para ${target.user.username} (${targetRole.name})`);
+        
+        modal.addComponents(
+          new ActionRowBuilder().addComponents(
+            new TextInputBuilder()
+              .setCustomId("text")
+              .setLabel("Tu experiencia (20-500 caracteres)")
+              .setStyle(TextInputStyle.Paragraph)
+              .setMinLength(config.minReviewLength)
+              .setMaxLength(config.maxReviewLength)
+              .setRequired(true)
+              .setPlaceholder("Describe tu experiencia con este miembro...")
+          ),
+          new ActionRowBuilder().addComponents(
+            new TextInputBuilder()
+              .setCustomId("stars")
+              .setLabel("Calificación (1.0 - 5.0)")
+              .setStyle(TextInputStyle.Short)
+              .setPlaceholder("Ej: 4.5 (decimales permitidos)")
+              .setMinLength(1)
+              .setMaxLength(4)
+              .setRequired(true)
+          )
+        );
+        
+        return i.showModal(modal);
+      }
     }
 
     // MODAL SUBMISSIONS
@@ -1573,7 +2137,7 @@ client.on("interactionCreate", async (i) => {
           cooldowns.clearAttempt(i.user.id);
           return i.reply({ 
             content: "❌ Calificación inválida. Usa números entre 1.0 y 5.0 (ej: 4.5)", 
-            flags: MessageFlags.Ephemeral 
+            ephemeral: true 
           });
         }
 
@@ -1581,7 +2145,7 @@ client.on("interactionCreate", async (i) => {
           cooldowns.clearAttempt(i.user.id);
           return i.reply({ 
             content: `❌ La reseña debe tener entre ${config.minReviewLength} y ${config.maxReviewLength} caracteres.`, 
-            flags: MessageFlags.Ephemeral 
+            ephemeral: true 
           });
         }
 
@@ -1591,7 +2155,7 @@ client.on("interactionCreate", async (i) => {
 
           if (!targetRole) {
             cooldowns.clearAttempt(i.user.id);
-            return i.reply({ content: "❌ Rol no válido", flags: MessageFlags.Ephemeral });
+            return i.reply({ content: "❌ Rol no válido", ephemeral: true });
           }
 
           cooldowns.setCooldown(i.user.id);
@@ -1637,7 +2201,7 @@ client.on("interactionCreate", async (i) => {
 
           return i.reply({ 
             content: `✅ ¡Reseña registrada correctamente! Has calificado a ${target.user.username} con ${rating}/5 estrellas.`, 
-            flags: MessageFlags.Ephemeral 
+            ephemeral: true 
           });
 
         } catch (error) {
@@ -1645,7 +2209,7 @@ client.on("interactionCreate", async (i) => {
           cooldowns.clearAttempt(i.user.id);
           return i.reply({ 
             content: "❌ Error al procesar tu reseña. Intenta de nuevo.", 
-            flags: MessageFlags.Ephemeral 
+            ephemeral: true 
           });
         }
       }
@@ -1688,14 +2252,14 @@ client.on("interactionCreate", async (i) => {
 
           return i.reply({ 
             content: "✅ Reporte enviado correctamente. Los administradores lo revisarán pronto.", 
-            flags: MessageFlags.Ephemeral 
+            ephemeral: true 
           });
 
         } catch (error) {
           logger.error(`Error en reporte: ${error.message}`);
           return i.reply({ 
             content: "❌ Error al enviar reporte", 
-            flags: MessageFlags.Ephemeral 
+            ephemeral: true 
           });
         }
       }
